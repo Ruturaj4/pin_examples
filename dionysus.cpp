@@ -113,7 +113,7 @@ public:
     this->owner = owner;
     this->obj_size = obj_size;
     // Lower bounds calculated here
-    this->lb = ub - obj_size;
+    this->lb = ub + obj_size;
   }
   int64_t get_ub() {return ub;}
   std::string get_type() {return type;}
@@ -218,7 +218,7 @@ VOID Instruction(INS ins, VOID *v)
     INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)), IARG_END);
   }
   #endif
-  // std::cout << "Mem dispacement: " << abs(INS_MemoryDisplacement(ins)) << '\n';
+  // std::cout << "Mem dispacement: " << INS_MemoryDisplacement(ins) << '\n';
   // std::cout << hex <<INS_Address(ins)<< "\t" << string(INS_Disassemble(ins)) << dec << '\n';
   // Get the owner for the particular static address
   std::string owner;
@@ -264,7 +264,6 @@ VOID Instruction(INS ins, VOID *v)
   || (INS_OperandMemoryBaseReg(ins, 0) == REG_EBP))
   && INS_OperandIsImmediate(ins, 1))
   {
-    std::cout << "mov disas: " << hex << INS_Disassemble(ins) << dec << '\n';
     std::cout << "BLock name: " << i->name << "\n";
     // Check if the rbp is not changed
     #ifdef RBP_DETECTION
@@ -283,23 +282,21 @@ VOID Instruction(INS ins, VOID *v)
     std::cout << "Owner:: " << i->objinfostack[owner]->get_owner() << '\n';
 
     // Store the immediate at particular stack position relative to rbp
-    // std::cout << "/* message */" << abs(INS_MemoryDisplacement(ins)) << '\n';
+    // std::cout << "/* message */" << INS_MemoryDisplacement(ins) << '\n';
     // if the value is already in the map
     // TODO: see if this is really required
     // TODO: if the value is not present in the stack, then add the value, but what if the
     // same location is being - but I think it is correctly implemented
-    if(i->relPosStack.find(abs(INS_MemoryDisplacement(ins))) != i->relPosStack.end())
+    if(i->relPosStack.find(INS_MemoryDisplacement(ins)) != i->relPosStack.end())
     {
-      i->relPosStack[abs(INS_MemoryDisplacement(ins))]->set_val(INS_OperandImmediate(ins, 1));
-      std::cout << "value: " << i->relPosStack[abs(INS_MemoryDisplacement(ins))]->get_value() << '\n';
+      i->relPosStack[INS_MemoryDisplacement(ins)]->set_val(INS_OperandImmediate(ins, 1));
     }
     else
     {
       // set the value and the owner
       // There is no need of the absolute value, as the stack can grow both ways
+      std::cout << "/* message: " << INS_MemoryDisplacement(ins) << '\n';
       i->relPosStack.insert(std::make_pair(INS_MemoryDisplacement(ins), new RelPos(INS_OperandImmediate(ins, 1), owner)));
-      std::cout << "ins operand immediate: " << INS_OperandImmediate(ins, 1) << '\n';
-      std::cout << "value: " << i->relPosStack[INS_MemoryDisplacement(ins)]->get_value() << '\n';
     }
 
     // Check if the address really has an owner: (this is equivalent to pass in python)
@@ -309,8 +306,8 @@ VOID Instruction(INS ins, VOID *v)
     std::cout << "Lower bounds: " << i->objinfostack[owner]->get_lb() << '\n';
     // If the type is array and the access is not within the bounds
     // If rsp is to be detected and rsp + x is equivalent to ebp - (rsp + x)
-    if ((abs(INS_MemoryDisplacement(ins)) > i->objinfostack[owner]->get_ub() ||
-    abs(INS_MemoryDisplacement(ins)) < i->objinfostack[owner]->get_lb()) &&
+    if ((INS_MemoryDisplacement(ins) > i->objinfostack[owner]->get_ub() ||
+    INS_MemoryDisplacement(ins) < i->objinfostack[owner]->get_lb()) &&
     i->objinfostack[owner]->get_obj() == "array")
     std::cout << "Boundover accessed by " << owner << '\n';
   }
@@ -326,7 +323,6 @@ VOID Instruction(INS ins, VOID *v)
     // move that value in the
     // INS_MemoryDisplacement(ins) gives the location of the stack and then
     // get_value() gives the value at that particular location of the stack
-    std::cout << "unordered_map::::" << i->relPosStack[INS_MemoryDisplacement(ins)]->get_value() << '\n';
     // register used in the instruction
     std::string insreg = REG_StringShort(INS_OperandReg(ins, 0));
     // Let the register structure hold the location on the stack for the particular register
@@ -345,10 +341,24 @@ VOID Instruction(INS ins, VOID *v)
   || (INS_OperandMemoryBaseReg(ins, 0) == REG_EBP))
   && INS_OperandIsReg(ins, 1))
   {
+    // set the value of of the pos stack if the owner is a pointer
+    if (REG_StringShort(INS_OperandReg(ins, 1)) == "rax")
+    {
+      if(i->relPosStack.find(INS_MemoryDisplacement(ins)) != i->relPosStack.end())
+      {
+        i->relPosStack[INS_MemoryDisplacement(ins)]->set_val((i->controlflowblock).rax);
+      }
+      else
+      {
+        // set the value and the owner
+        // There is no need of the absolute value, as the stack can grow both ways
+        i->relPosStack.insert(std::make_pair(INS_MemoryDisplacement(ins), new RelPos((i->controlflowblock).rax, owner)));
+      }
+    }
+
     // Check to see if the owner is a pointer
     if (i->objinfostack[owner]->get_obj() == "pointer")
     {
-      std::cout << "disasCought: " << hex << INS_Disassemble(ins) << dec << '\n';
       // register used in the instruction
       std::string insreg = REG_StringShort(INS_OperandReg(ins, 1));
       // get the Register value
@@ -358,18 +368,61 @@ VOID Instruction(INS ins, VOID *v)
           // pointer is getting the address of owner_prop and hence its bounds
           std::string owner_prop = i->relPosStack[(i->controlflowblock).rax]->get_owner();
           accessboundsmap.insert(std::make_pair(owner, new AccessBounds(i->objinfostack[owner_prop]->get_lb(), i->objinfostack[owner_prop]->get_ub())));
-          std::cout << "Owner: " << owner << '\n';
           std::cout << "lower bounds: " << accessboundsmap[owner]->get_base() <<'\n';
           std::cout << "Upper bounds: " << accessboundsmap[owner]->get_bound() <<'\n';
       }
     }
   }
-  if (i->objinfostack[owner]->get_obj() == "pointer")
+
+  // If the pointer value is loaded
+  // rax,QWORD PTR [rbp-0x8]
+  if ((INS_Opcode(ins) == XED_ICLASS_MOV) && INS_OperandIsMemory(ins, 1)
+  && ((INS_OperandWidth(ins, 1) == 32)
+      || (INS_OperandWidth(ins, 1) == 64))
+  && ((INS_OperandMemoryBaseReg(ins, 1) == REG_RBP)
+  || (INS_OperandMemoryBaseReg(ins, 1) == REG_EBP)))
   {
-    std::cout << hex << INS_Disassemble(ins) << dec << '\n';
-    if ((INS_Opcode(ins) == XED_ICLASS_MOV) && (INS_OperandIsReg(ins, 1)))
-    std::cout << "gotch!!!!!!!!!!!!!!!!!!!!" << '\n';
+    if (i->objinfostack[owner]->get_obj() == "pointer")
+    {
+      std::string insreg = REG_StringShort(INS_OperandReg(ins, 0));
+      if ((insreg) == "rax") //|| "eax" || "ax" || "ah" || "al")
+      {
+        (i->controlflowblock).rax = INS_MemoryDisplacement(ins);
+      }
+    }
   }
+
+  if ((INS_Opcode(ins) == XED_ICLASS_MOV) && INS_OperandIsMemory(ins, 1)
+  && ((INS_OperandWidth(ins, 1) == 32)
+      || (INS_OperandWidth(ins, 1) == 64))
+  && (INS_OperandIsMemory(ins, 1))
+  && ((INS_OperandMemoryBaseReg(ins, 1) != REG_RBP)
+  && (INS_OperandMemoryBaseReg(ins, 1) != REG_EBP)))
+  {
+    if (i->objinfostack[owner]->get_obj() == "scalar")
+    {
+      std::string insreg = REG_StringShort(INS_OperandMemoryBaseReg(ins, 1));
+      if ((insreg) == "rax")
+      {
+        // Checks can be done here
+        // Get the owner
+        if (i->objinfostack[i->relPosStack[(i->controlflowblock).rax]->get_owner()]->get_obj() == "pointer")
+        {
+          if (((accessboundsmap[i->relPosStack[(i->controlflowblock).rax]->get_owner()]->get_base() -
+            INS_OperandMemoryDisplacement(ins, 1)) > (accessboundsmap[i->relPosStack[(i->controlflowblock).rax]->get_owner()]->get_base())) ||
+            ((accessboundsmap[i->relPosStack[(i->controlflowblock).rax]->get_owner()]->get_base()) - i->objinfostack[owner]->get_obj_size() -
+            INS_OperandMemoryDisplacement(ins, 1)) < accessboundsmap[i->relPosStack[(i->controlflowblock).rax]->get_owner()]->get_bound())
+          std::cout << "abort" << '\n';
+        }
+      }
+    }
+  }
+
+  // if (i->objinfostack[owner]->get_obj() == "pointer")
+  // {
+  //   std::cout << hex << INS_Disassemble(ins) << dec << '\n';
+  //   // if ((INS_Opcode(ins) == XED_ICLASS_MOV) && (INS_OperandIsReg(ins, 1)))
+  // }
 
   // TODO: Is there any need of control flow block?
   // For control flow Blocks
