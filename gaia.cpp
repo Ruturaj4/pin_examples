@@ -39,6 +39,8 @@ public:
 // Map to store all bound information globally
 // key: owner
 std::unordered_map <std::string, AccessBounds*> accessboundsmap;
+// Actual stack (positions related to rbp) hash map
+std::unordered_map <uint64_t, std::string> relPosStack;
 
 // Owner infomation of each location
 class InsInfo
@@ -102,8 +104,6 @@ struct Block
   std::unordered_map <std::string, ObjInfo*> objinfostack;
   // static code locations hash map
   std::unordered_map <ADDRINT, InsInfo*> inscodestack;
-  // Actual stack (positions related to rbp) hash map
-  std::unordered_map <uint64_t, std::string> relPosStack;
 };
 
 // rbp value Check
@@ -167,11 +167,11 @@ VOID mov_immediate(uint64_t addr, CONTEXT * ctxt, Block &i, std::string disassin
     effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement;
   }
 
-  if(i.relPosStack.find(effective_dispacement) == i.relPosStack.end())
+  if(relPosStack.find(effective_dispacement) == relPosStack.end())
   {
     // set the owner
     // There is no need of the absolute value, as the stack can grow both ways
-    i.relPosStack.insert(std::make_pair(effective_dispacement, owner));
+    relPosStack.insert(std::make_pair(effective_dispacement, owner));
   }
 
   // Save the upper and lower bounds
@@ -215,23 +215,23 @@ VOID mov_reg(uint64_t addr, CONTEXT * ctxt, Block &i, std::string disassins,
     effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement;
   }
   // set the owner information on the stack
-  if(i.relPosStack.find(effective_dispacement) == i.relPosStack.end())
+  if(relPosStack.find(effective_dispacement) == relPosStack.end())
   {
     // set the owner
     // There is no need of the absolute value, as the stack can grow both ways
-    i.relPosStack.insert(std::make_pair(effective_dispacement, owner));
+    relPosStack.insert(std::make_pair(effective_dispacement, owner));
   }
   // Check to see if the owner is a pointer
   if (i.objinfostack[owner]->get_obj() == "pointer")
   {
     // get the Register value
     // pointer is getting the address of owner_prop and hence its bounds
-    if (i.relPosStack.find(PIN_GetContextReg(ctxt, reg)) == i.relPosStack.end())
+    if (relPosStack.find(PIN_GetContextReg(ctxt, reg)) == relPosStack.end())
     {
       std::cout << "Invalid access! The owner seems not to be present" << '\n';
       std::exit(1);
     }
-    std::string owner_prop = i.relPosStack[PIN_GetContextReg(ctxt, reg)];
+    std::string owner_prop = relPosStack[PIN_GetContextReg(ctxt, reg)];
     if(accessboundsmap.find(owner) == accessboundsmap.end())
       accessboundsmap.insert(std::make_pair(owner, new AccessBounds(accessboundsmap[owner_prop]->get_base(),
       accessboundsmap[owner_prop]->get_bound())));
