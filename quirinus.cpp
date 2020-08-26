@@ -228,9 +228,9 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
       // if index register is not present
       effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement;
     }
-    // std::cout << "effective_dispacement: " << effective_dispacement << '\n';
-    // std::cout << "Upper bounds: " << accessboundsmap[owner]->get_bound() << '\n';
-    // std::cout << "Lower bounds: " << accessboundsmap[owner]->get_base() << '\n';
+    std::cout << "effective_dispacement: " << effective_dispacement << '\n';
+    std::cout << "Upper bounds: " << accessboundsmap[owner]->get_bound() << '\n';
+    std::cout << "Lower bounds: " << accessboundsmap[owner]->get_base() << '\n';
     // If the type is array and the access is not within the bounds
     if ((effective_dispacement >= accessboundsmap[owner]->get_base() ||
     effective_dispacement < accessboundsmap[owner]->get_bound()))
@@ -284,11 +284,12 @@ REG reg, int64_t ins_size)
           accessboundsmap[owner]->set_bounds(accessboundsmap[k]->get_base(),
             accessboundsmap[k]->get_bound());
         }
-      if (mallocmap.find(PIN_GetContextReg(ctxt, base_reg)) != mallocmap.end())
-      {
-        accessboundsmap[owner]->set_bounds(PIN_GetContextReg(ctxt, base_reg),
-          PIN_GetContextReg(ctxt, base_reg)+mallocmap[PIN_GetContextReg(ctxt, base_reg)]->getsize());
       }
+      if (mallocmap.find(PIN_GetContextReg(ctxt, reg)) != mallocmap.end())
+      {
+        accessboundsmap[owner]->set_bounds(
+          PIN_GetContextReg(ctxt, reg)+mallocmap[PIN_GetContextReg(ctxt, reg)]->getsize(),
+          PIN_GetContextReg(ctxt, reg));
       }
   }
 }
@@ -510,13 +511,12 @@ VOID MallocBefore(char *name, ADDRINT size, ADDRINT addrs)
     cerr << "Heap full!\n";
     return;
   }
+  // std::cout << name << "(" << size << ")" << '\n';
   // Lazy size allocation
-  std::cout << "sizeof malloc: " << size << '\n';
-  std::cout << "lazyallocatedsize: " << lazyallocatedsize << '\n';
   lazyallocatedsize = size;
 }
 
-VOID MallocAfter(char *name, ADDRINT size, ADDRINT addrs)
+VOID MallocAfter(char *name, ADDRINT addrs, ADDRINT size)
 {
   if (addrs == '\0')
   {
@@ -546,7 +546,7 @@ VOID CallocBefore(CHAR * name, ADDRINT count, ADDRINT size, ADDRINT return_ip)
 /*******************Realloc routines******************/
 VOID ReallocBefore(CHAR * name, ADDRINT addr, ADDRINT size, ADDRINT return_ip)
 {
-  std::cout << name << " : " << addr << "(" << size << ")" << " : " << return_ip << endl;
+  // std::cout << name << " : " << addr << "(" << size << ")" << " : " << return_ip << endl;
   // Check if it is already present in the map
   if (!lazyallocatedsize)
     lazyallocatedsize = size;
@@ -559,14 +559,14 @@ VOID ReallocAfter(ADDRINT ret)
     cerr << "Heap full!\n";
     return;
   }
-  std::cout << "realloc: " << ret << " : " << lazyallocatedsize << "\n";
+  // std::cout << "realloc: " << ret << " : " << lazyallocatedsize << "\n";
   if (mallocmap.find(ret) == mallocmap.end())
   {
     mallocmap.insert(std::make_pair(ret, new MallocMap(lazyallocatedsize, true)));
   }
   else
   {
-    std::cout << "size:" << lazyallocatedsize << '\n';
+    // std::cout << "size:" << lazyallocatedsize << '\n';
     mallocmap[ret]->setsize(lazyallocatedsize);
   }
   lazyallocatedsize = 0;
@@ -575,7 +575,7 @@ VOID ReallocAfter(ADDRINT ret)
 
 VOID FreeBefore(ADDRINT ret)
 {
-  std::cout << "returns: " <<  ret << '\n';
+  // std::cout << "returns: " <<  ret << '\n';
 }
 
 void Image(IMG img, VOID *v)
@@ -589,6 +589,11 @@ void Image(IMG img, VOID *v)
       struct Block* v = iter->second;
       RTN_CreateAt(v->fun_entry, v->name);
     }
+  }
+  // set library path accordingly
+  // if (IMG_Name(img) == "/lib/x86_64-linux-gnu/libc.so.6")
+  if (IMG_Name(img).find("libc") != std::string::npos)
+  {
     RTN mallocRtn = RTN_FindByName(img, "malloc");
     if (RTN_Valid(mallocRtn))
     {
@@ -600,36 +605,36 @@ void Image(IMG img, VOID *v)
                     IARG_END);
       RTN_InsertCall(mallocRtn, IPOINT_AFTER, (AFUNPTR)MallocAfter,
                     IARG_ADDRINT, "malloc",
-                    IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+                    IARG_FUNCRET_EXITPOINT_VALUE,
                     IARG_END);
       RTN_Close(mallocRtn);
     }
     RTN callocRtn = RTN_FindByName(img, "calloc");
     if (RTN_Valid(callocRtn))
     {
-      // RTN_Open(callocRtn);
-      // // Instrument malloc() to print the input argument value and the return value.
-      // RTN_InsertCall(callocRtn, IPOINT_BEFORE, (AFUNPTR)CallocBefore,
-      //               IARG_ADDRINT, "calloc",
-      //               IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
-      //               IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
-      //               IARG_END);
-      // RTN_Close(callocRtn);
+      RTN_Open(callocRtn);
+      // Instrument malloc() to print the input argument value and the return value.
+      RTN_InsertCall(callocRtn, IPOINT_BEFORE, (AFUNPTR)CallocBefore,
+                    IARG_ADDRINT, "calloc",
+                    IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+                    IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
+                    IARG_END);
+      RTN_Close(callocRtn);
     }
     RTN reallocRtn = RTN_FindByName(img, "realloc");
     if (RTN_Valid(reallocRtn))
     {
-      // RTN_Open(reallocRtn);
-      // // Instrument malloc() to print the input argument value and the return value.
-      // RTN_InsertCall(reallocRtn, IPOINT_BEFORE, (AFUNPTR)ReallocBefore,
-      //               IARG_ADDRINT, "realloc",
-      //               IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
-      //               IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
-      //               IARG_END);
-      // RTN_InsertCall(reallocRtn, IPOINT_AFTER, (AFUNPTR)ReallocAfter,
-      //               IARG_FUNCRET_EXITPOINT_VALUE,
-      //               IARG_END);
-      // RTN_Close(reallocRtn);
+      RTN_Open(reallocRtn);
+      // Instrument malloc() to print the input argument value and the return value.
+      RTN_InsertCall(reallocRtn, IPOINT_BEFORE, (AFUNPTR)ReallocBefore,
+                    IARG_ADDRINT, "realloc",
+                    IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+                    IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
+                    IARG_END);
+      RTN_InsertCall(reallocRtn, IPOINT_AFTER, (AFUNPTR)ReallocAfter,
+                    IARG_FUNCRET_EXITPOINT_VALUE,
+                    IARG_END);
+      RTN_Close(reallocRtn);
     }
     RTN freeRtn = RTN_FindByName(img, "free");
     if (RTN_Valid(freeRtn))
@@ -644,7 +649,7 @@ void Image(IMG img, VOID *v)
   }
 }
 
-void readInput(char *filename)
+void readInput(const char *filename)
 {
   std::string line;
   std::ifstream myfile(filename);
@@ -767,6 +772,9 @@ void readInput(char *filename)
   else std::cout << "Unable to open file\n";
 }
 
+KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool",
+    "i", "pintool", "specify input file name");
+
 // This function is called when the application exits
 VOID Fini(INT32 code, VOID *v)
 {
@@ -783,12 +791,12 @@ INT32 Usage()
 int main(int argc, char * argv[])
 {
     // Symbols
-    // PIN_InitSymbols();
+    PIN_InitSymbols();
     if (PIN_Init(argc, argv)) return Usage();
     // Argv[6] is the program image
     ProgramImage = argv[6];
     // Argv[7] is the name of the input file
-    readInput(argv[7]);
+    readInput(KnobOutputFile.Value().c_str());
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
