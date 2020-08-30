@@ -55,13 +55,18 @@ class AccessBounds
 private:
   uint64_t base;
   uint64_t bound;
+  // actual location on stack
+  uint64_t location;
 public:
-  AccessBounds(uint64_t base, uint64_t bound){this->base = base; this->bound = bound;}
+  AccessBounds(uint64_t base, uint64_t bound, uint64_t location){this->base = base; this->bound = bound;
+  this->location = location;}
   void set_base(uint64_t base){this->base = base;}
   void set_bound(uint64_t bound){this->bound = bound;}
   void set_bounds(uint64_t base, uint64_t bound){this->base = base; this->bound = bound;}
   uint64_t get_base(){return this->base;}
   uint64_t get_bound(){return this->bound;}
+  void set_location(uint64_t location){this->location = location;}
+  uint64_t get_location(){return this->location;}
 };
 
 // Map to store all bound information globally
@@ -186,8 +191,14 @@ VOID rbp_val_set(uint64_t addr, CONTEXT * ctxt, Block &i, std::string disassins)
     std::string k = iter->first;
     ObjInfo* v = iter->second;
     if(accessboundsmap.find(k) == accessboundsmap.end())
-          accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb() +
-        i.rbp_value, v->get_ub() + i.rbp_value)));
+    {
+      std::cout << "object: " << k << '\n';
+      std::cout << "lb: " << v->get_lb() + i.rbp_value << '\n';
+      std::cout << "ub: " << v->get_ub() + i.rbp_value << '\n';
+      accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb() +
+        i.rbp_value, v->get_ub() + i.rbp_value, v->get_ub() + i.rbp_value)));
+      // accessboundsmap.set_location(v->get_lb() + i.rbp_value);
+    }
   }
 }
 
@@ -202,8 +213,11 @@ VOID rsp_val_set(CONTEXT * ctxt, Block &i)
     std::string k = iter->first;
     ObjInfo* v = iter->second;
     if(accessboundsmap.find(k) == accessboundsmap.end())
-          accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb() +
-        i.rsp_value, v->get_ub() + i.rsp_value)));
+      {
+      accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb() +
+        i.rsp_value, v->get_ub() + i.rsp_value, v->get_ub() + i.rsp_value)));
+      // accessboundsmap.set_location(v->get_lb() + i.rsp_value);
+      }
   }
 }
 
@@ -214,6 +228,8 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
   // effective address the instruction is referring to
   // Effective address = Displacement + BaseReg + IndexReg * Scale
   std::cout << "dissss: " << disassins << '\n';
+  std::cout << "reg: " << REG_StringShort(REG_FullRegName(base_reg)) << '\n';
+  std::cout << "owner: " << owner << '\n';
   uint64_t effective_dispacement = 0;
   if (i.objinfostack.find(owner) != i.objinfostack.end())
   {
@@ -227,6 +243,7 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
     {
       // if index register is not present
       effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement;
+      std::cout << "eff: " << effective_dispacement << '\n';
     }
     std::cout << "effective_dispacement: " << effective_dispacement << '\n';
     std::cout << "Upper bounds: " << accessboundsmap[owner]->get_bound() << '\n';
@@ -235,8 +252,15 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
     if ((effective_dispacement >= accessboundsmap[owner]->get_base() ||
     effective_dispacement < accessboundsmap[owner]->get_bound()))
     {
-      std::cout << "Boundover accessed by " << owner << " in mov_immediate" << '\n';
-      std::exit(1);
+      // if (accessboundsmap.get_location)
+      std::cout << "Location: " << accessboundsmap[owner]->get_location() << '\n';
+      if (accessboundsmap[owner]->get_location() == effective_dispacement);
+      else
+      {
+        std::cout << "Boundover accessed by " << owner << " in mov_immediate, at "
+        << std::hex << addr << '\n';
+        std::exit(1);
+      }
     }
   }
   /*todo: support static or global array as well*/
@@ -245,18 +269,30 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
     // instruction size is needed for rip relative addressing
     if (REG_valid(index_reg))
     { // if index register is present, add it
+      if (PIN_GetContextReg(ctxt, base_reg) == REG_RIP)
       effective_dispacement = displacement + PIN_GetContextReg(ctxt, base_reg)
       + (PIN_GetContextReg(ctxt, index_reg) * scale) + ins_size;
+      else
+      effective_dispacement = displacement + PIN_GetContextReg(ctxt, base_reg)
+      + (PIN_GetContextReg(ctxt, index_reg) * scale);
     }
     else
     { // if index register is not present
-      effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement + ins_size;
+      effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement + ins_size;// + ins_size;
     }
+    std::cout << "global Base: " << accessboundsmap[owner]->get_base() << '\n';
+    std::cout << "global Bound: " << accessboundsmap[owner]->get_bound() << '\n';
+    std::cout << "effective_dispacement: " << effective_dispacement << '\n';
     if ((effective_dispacement >= accessboundsmap[owner]->get_base() ||
     effective_dispacement < accessboundsmap[owner]->get_bound()))
       {
-        std::cout << "Boundover accessed by " << owner << " in mov_immediate" << '\n';
-        std::exit(1);
+        if (accessboundsmap[owner]->get_location() == effective_dispacement);
+        else
+        {
+          std::cout << "Boundover accessed by " << owner << " in mov_immediate, at "
+          << std::hex << addr << '\n';
+          std::exit(1);
+        }
       }
   }
   else
@@ -275,22 +311,42 @@ REG reg, int64_t ins_size)
   if (i.objinfostack.find(owner) != i.objinfostack.end())
   {
       std::cout << "dissss: " << disassins << '\n';
+      std::cout << "owner: " << owner << '\n';
+      std::cout << "reg: " << PIN_GetContextReg(ctxt, reg) << '\n';
       for(std::unordered_map<std::string, AccessBounds*>::iterator iter = accessboundsmap.begin(); iter != accessboundsmap.end(); ++iter)
       {
         std::string k = iter->first;
         AccessBounds* v = iter->second;
         if (PIN_GetContextReg(ctxt, reg) < v->get_base() && PIN_GetContextReg(ctxt, reg) >= v->get_bound())
         {
+          std::cout << "ub: " << v->get_base() << '\n';
+          std::cout << "lb: " << v->get_bound() << '\n';
+          std::cout << "k:" << k << '\n';
           accessboundsmap[owner]->set_bounds(accessboundsmap[k]->get_base(),
             accessboundsmap[k]->get_bound());
         }
       }
       if (mallocmap.find(PIN_GetContextReg(ctxt, reg)) != mallocmap.end())
       {
+        std::cout << "in malloc" << '\n';
         accessboundsmap[owner]->set_bounds(
           PIN_GetContextReg(ctxt, reg)+mallocmap[PIN_GetContextReg(ctxt, reg)]->getsize(),
           PIN_GetContextReg(ctxt, reg));
       }
+  }
+  else if (globalobjinfostack.find(owner) != globalobjinfostack.end())
+  {
+    std::cout << "dissss: " << disassins << '\n';
+    for(std::unordered_map<std::string, AccessBounds*>::iterator iter = accessboundsmap.begin(); iter != accessboundsmap.end(); ++iter)
+    {
+      std::string k = iter->first;
+      AccessBounds* v = iter->second;
+      if (PIN_GetContextReg(ctxt, reg) < v->get_base() && PIN_GetContextReg(ctxt, reg) >= v->get_bound())
+      {
+        accessboundsmap[owner]->set_bounds(accessboundsmap[k]->get_base(),
+          accessboundsmap[k]->get_bound());
+      }
+    }
   }
 }
 
@@ -312,13 +368,14 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
       effective_dispacement = displacement + PIN_GetContextReg(ctxt, base_reg);
     }
     std::cout << "dissss: " << disassins << '\n';
-    // std::cout << "Base: " << accessboundsmap[owner]->get_base() << '\n';
-    // std::cout << "Bound: " << accessboundsmap[owner]->get_bound() << '\n';
-    // std::cout << "effective_dispacement: " << effective_dispacement << '\n';
+    std::cout << "Base: " << accessboundsmap[owner]->get_base() << '\n';
+    std::cout << "Bound: " << accessboundsmap[owner]->get_bound() << '\n';
+    std::cout << "effective_dispacement: " << effective_dispacement << '\n';
     if (effective_dispacement >= accessboundsmap[owner]->get_base() ||
     effective_dispacement < accessboundsmap[owner]->get_bound())
     {
-      std::cout << "Boundover access detected. By " << owner << " in mov_mem_reg" << '\n';
+      std::cout << "Boundover access detected. By " << owner << " in mov_mem_reg, at "
+      << std::hex << addr << '\n';
       std::exit(1);
     }
   }
@@ -326,21 +383,27 @@ std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_
   {
     if (REG_valid(index_reg))
     { // if index register is present, add it
+      if (PIN_GetContextReg(ctxt, base_reg) == REG_RIP)
       effective_dispacement = displacement + PIN_GetContextReg(ctxt, base_reg)
       + (PIN_GetContextReg(ctxt, index_reg) * scale) + ins_size;
+      else
+      effective_dispacement = displacement + PIN_GetContextReg(ctxt, base_reg)
+      + (PIN_GetContextReg(ctxt, index_reg) * scale);
     }
     else
     { // if index register is not present
-      effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement + ins_size;
+      effective_dispacement = PIN_GetContextReg(ctxt, base_reg) + displacement;// + ins_size;
     }
+    std::cout << "ins size: " << ins_size << '\n';
     std::cout << "dissss: " << disassins << '\n';
-    // std::cout << "global Base: " << accessboundsmap[owner]->get_base() << '\n';
-    // std::cout << "global Bound: " << accessboundsmap[owner]->get_bound() << '\n';
-    // std::cout << "effective_dispacement: " << effective_dispacement << '\n';
+    std::cout << "global Base: " << accessboundsmap[owner]->get_base() << '\n';
+    std::cout << "global Bound: " << accessboundsmap[owner]->get_bound() << '\n';
+    std::cout << "effective_dispacement: " << effective_dispacement << '\n';
     if (effective_dispacement >= accessboundsmap[owner]->get_base() ||
     effective_dispacement < accessboundsmap[owner]->get_bound())
     {
-      std::cout << "Boundover access detected. By " << owner << " in mov_mem_reg" << '\n';
+      std::cout << "Boundover access detected. By " << owner << " in mov_mem_reg, at "
+      << std::hex << addr << '\n';
       std::exit(1);
     }
   }
@@ -350,6 +413,8 @@ VOID mov_reg_rsi(uint64_t addr, CONTEXT * ctxt, Block &i, std::string disassins,
 std::string owner, int64_t displacement, int64_t scale, REG index_reg, REG base_reg,
 REG reg, int64_t ins_size)
 {
+  std::cout << "dissss: " << disassins << '\n';
+  std::cout << "owner: " << owner << '\n';
   // effective address the instruction is referring to
   uint64_t effective_dispacement = 0;
   if (i.objinfostack.find(owner) != i.objinfostack.end())
@@ -358,6 +423,9 @@ REG reg, int64_t ins_size)
       accessboundsmap[owner]->set_bounds(
         effective_dispacement + PIN_GetContextReg(ctxt, REG_RDI) * 8, effective_dispacement);
   }
+  std::cout << "number of args: " << PIN_GetContextReg(ctxt, REG_RDI) << '\n';
+  std::cout << "lb: " << effective_dispacement << '\n';
+  std::cout << "ub:" << effective_dispacement + PIN_GetContextReg(ctxt, REG_RDI) * 8 << '\n';
 }
 
 // Pin calls this function every time a new instruction is encountered
@@ -456,6 +524,8 @@ VOID Instruction(INS ins, VOID *v)
         {
           if (REG_StringShort(REG_FullRegName(INS_OperandReg(ins, 1))) != "rsi")
           {
+            if ((REG_StringShort(REG_FullRegName(INS_OperandMemoryBaseReg(ins, 0))) == "rbp")
+            || REG_StringShort(REG_FullRegName(INS_OperandMemoryBaseReg(ins, 0))) == "rsp")
             INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)mov_reg, IARG_ADDRINT,
             INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)),
             IARG_PTR, new string(owner), IARG_ADDRINT, INS_OperandMemoryDisplacement(ins, 0),
@@ -463,11 +533,41 @@ VOID Instruction(INS ins, VOID *v)
             IARG_UINT32, REG(INS_OperandMemoryBaseReg(ins, 0)),
             IARG_UINT32, REG(INS_OperandReg(ins, 1)),
             IARG_UINT32, INS_Size(ins), IARG_END);
+            // for globals, where rip relative addressing is used
+            else if (INS_OperandMemoryBaseReg(ins, 0) == REG_RIP)
+            INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)mov_reg, IARG_ADDRINT,
+            INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)),
+            IARG_PTR, new string(owner), IARG_ADDRINT, INS_OperandMemoryDisplacement(ins, 0),
+            IARG_ADDRINT, INS_OperandMemoryScale(ins, 0), IARG_UINT32, REG(INS_OperandMemoryIndexReg(ins, 0)),
+            IARG_UINT32, REG(INS_OperandMemoryBaseReg(ins, 0)),
+            IARG_UINT32, REG(INS_OperandReg(ins, 1)),
+            IARG_UINT32, INS_Size(ins), IARG_END);
+            // else if immediate through register
+            else
+            INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)mov_immediate, IARG_ADDRINT,
+            INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)),
+            IARG_PTR, new string(owner), IARG_ADDRINT, INS_OperandMemoryDisplacement(ins, 0),
+            IARG_ADDRINT, INS_OperandMemoryScale(ins, 0),
+            IARG_UINT32, REG(INS_OperandMemoryIndexReg(ins, 0)),
+            IARG_UINT32, REG(INS_OperandMemoryBaseReg(ins, 0)),
+            IARG_UINT32, INS_Size(ins), IARG_END);
           }
           else
           {
             // handle fun arguments
+            if (((REG_StringShort(REG_FullRegName(INS_OperandMemoryBaseReg(ins, 0))) == "rbp")
+            || REG_StringShort(REG_FullRegName(INS_OperandMemoryBaseReg(ins, 0))) == "rsp")
+            && (i->name == "main"))
             INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)mov_reg_rsi, IARG_ADDRINT,
+            INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)),
+            IARG_PTR, new string(owner), IARG_ADDRINT, INS_OperandMemoryDisplacement(ins, 0),
+            IARG_ADDRINT, INS_OperandMemoryScale(ins, 0), IARG_UINT32, REG(INS_OperandMemoryIndexReg(ins, 0)),
+            IARG_UINT32, REG(INS_OperandMemoryBaseReg(ins, 0)),
+            IARG_UINT32, REG(INS_OperandReg(ins, 1)),
+            IARG_UINT32, INS_Size(ins), IARG_END);
+            // else if immediate through register
+            else
+            INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)mov_reg, IARG_ADDRINT,
             INS_Address(ins), IARG_CONTEXT, IARG_PTR, &(*i), IARG_PTR, new string(INS_Disassemble(ins)),
             IARG_PTR, new string(owner), IARG_ADDRINT, INS_OperandMemoryDisplacement(ins, 0),
             IARG_ADDRINT, INS_OperandMemoryScale(ins, 0), IARG_UINT32, REG(INS_OperandMemoryIndexReg(ins, 0)),
@@ -766,7 +866,7 @@ void readInput(const char *filename)
       std::string k = iter->first;
       GlobObjInfo* v = iter->second;
       if(accessboundsmap.find(k) == accessboundsmap.end())
-        accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb(), v->get_ub())));
+        accessboundsmap.insert(std::make_pair(k, new AccessBounds(v->get_lb(), v->get_ub(), v->get_ub())));
     }
   }
   else std::cout << "Unable to open file\n";
